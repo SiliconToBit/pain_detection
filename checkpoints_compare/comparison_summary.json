@@ -1,0 +1,84 @@
+{
+  "timestamp": 1775141420,
+  "results": [
+    {
+      "name": "baseline_ce",
+      "save_dir": "checkpoints_compare/baseline_ce",
+      "elapsed_sec": 244.36,
+      "kappa": 0.1225777377196936,
+      "accuracy": 0.3524390243902439,
+      "f1_weighted": 0.24744143963837653,
+      "loss": 1.040875551282963,
+      "loss_type": "ce",
+      "feature_mode": "basic",
+      "normalize_mode": "minmax"
+    },
+    {
+      "name": "ce_enhanced_minmax",
+      "save_dir": "checkpoints_compare/ce_enhanced_minmax",
+      "elapsed_sec": 254.81,
+      "kappa": 0.1362827164899103,
+      "accuracy": 0.3861419068736142,
+      "f1_weighted": 0.31489199476266183,
+      "loss": 1.036470282262815,
+      "loss_type": "ce",
+      "feature_mode": "enhanced",
+      "normalize_mode": "minmax"
+    },
+    {
+      "name": "ce_subject_basic",
+      "save_dir": "checkpoints_compare/ce_subject_basic",
+      "elapsed_sec": 250.95,
+      "kappa": 0.0,
+      "accuracy": 0.475,
+      "f1_weighted": 0.3059322033898305,
+      "loss": 1.0933115410434697,
+      "loss_type": "ce",
+      "feature_mode": "basic",
+      "normalize_mode": "subject"
+    },
+    {
+      "name": "ce_manual_mid_weight",
+      "save_dir": "checkpoints_compare/ce_manual_mid_weight",
+      "elapsed_sec": 248.17,
+      "kappa": 0.0,
+      "accuracy": 0.475,
+      "f1_weighted": 0.3059322033898305,
+      "loss": 1.013543625681469,
+      "loss_type": "ce",
+      "feature_mode": "basic",
+      "normalize_mode": "minmax"
+    },
+    {
+      "name": "enhanced_coral",
+      "save_dir": "checkpoints_compare/enhanced_coral",
+      "elapsed_sec": 280.32,
+      "kappa": 0.0,
+      "accuracy": 0.475,
+      "f1_weighted": 0.3059322033898305,
+      "loss": 0.5661153332885775,
+      "loss_type": "coral",
+      "feature_mode": "enhanced",
+      "normalize_mode": "subject"
+    }
+  ],
+  "failed": [],
+  "best": {
+    "name": "ce_enhanced_minmax",
+    "save_dir": "checkpoints_compare/ce_enhanced_minmax",
+    "elapsed_sec": 254.81,
+    "kappa": 0.1362827164899103,
+    "accuracy": 0.3861419068736142,
+    "f1_weighted": 0.31489199476266183,
+    "loss": 1.036470282262815,
+    "loss_type": "ce",
+    "feature_mode": "enhanced",
+    "normalize_mode": "minmax"
+  },
+  "delta_vs_baseline": {
+    "kappa": 0.013705,
+    "accuracy": 0.033703,
+    "f1_weighted": 0.067451,
+    "loss": -0.004405
+  }
+}
