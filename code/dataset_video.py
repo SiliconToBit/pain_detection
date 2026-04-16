@@ -19,7 +19,7 @@ class VideoFrameSequenceDataset(Dataset):
     """
     视频帧序列数据集
     
-    从 txt 文件读取数据列表，组织成帧序列用于训练
+    从 txt 文件读取数据列表,组织成帧序列用于训练
     
     txt 文件格式: <file_path> <label> <video_id>
     
@@ -57,7 +57,7 @@ class VideoFrameSequenceDataset(Dataset):
         self.max_frames = max_frames
         self.return_video_id = return_video_id
         
-        # 解析 txt 文件，按 video_id 组织数据
+        # 解析 txt 文件,按 video_id 组织数据
         self.video_data = self._parse_txt_file(txt_path)
         self.video_ids = list(self.video_data.keys())
         
@@ -69,7 +69,7 @@ class VideoFrameSequenceDataset(Dataset):
     
     def _parse_txt_file(self, txt_path: str) -> Dict[int, Dict]:
         """
-        解析 txt 文件，按 video_id 组织帧数据
+        解析 txt 文件,按 video_id 组织帧数据
         
         Returns:
             video_data: {video_id: {'frames': [paths], 'label': int}}
@@ -135,7 +135,7 @@ class VideoFrameSequenceDataset(Dataset):
         num_frames = len(frames)
         
         if num_frames <= self.seq_len:
-            # 帧数不足，重复最后一帧
+            # 帧数不足,重复最后一帧
             sampled = frames.copy()
             while len(sampled) < self.seq_len:
                 sampled.append(frames[-1])

@@ -1,143 +1,206 @@
-import argparse
+"""
+视频疼痛识别预测脚本
+- 加载训练好的 CNN+LSTM 模型
+- 对视频帧序列进行疼痛等级预测
+"""
 
-import numpy as np
-import pandas as pd
+import os
 import torch
+import numpy as np
+from PIL import Image
+from pathlib import Path
+from typing import List, Optional
 
-from model import HRSingleModalModel
-
-
-def parse_args():
-    parser = argparse.ArgumentParser(description="Predict pain level from HR sequence")
-    parser.add_argument("--ckpt", default="checkpoints_hr/best_hr_model.pth", help="Path to checkpoint")
-    parser.add_argument("--seq-len", type=int, default=30, help="Sequence length")
-    parser.add_argument("--num-classes", type=int, default=3, help="Number of classes")
-    parser.add_argument("--hr-seq", default=None, help="Comma-separated HR values")
-    parser.add_argument("--csv", default=None, help="CSV path containing hr_sequence column")
-    parser.add_argument("--row", type=int, default=0, help="Row index when reading from --csv")
-    parser.add_argument("--loss-type", default="auto", choices=["auto", "ce", "coral"])
-    parser.add_argument("--model-arch", default="auto", choices=["auto", "causal_gru", "legacy_bilstm"])
-    parser.add_argument("--hidden-dim", type=int, default=-1)
-    parser.add_argument("--feature-mode", default="auto", choices=["auto", "basic", "enhanced"])
-    return parser.parse_args()
+from model_video import build_model
+from dataset_video import get_val_transform
 
 
-def parse_sequence(seq_text, seq_len):
-    values = [float(x.strip()) for x in seq_text.split(",") if x.strip()]
-    if not values:
-        raise ValueError("Empty sequence")
-
-    if len(values) < seq_len:
-        values += [values[-1]] * (seq_len - len(values))
-    else:
-        values = values[:seq_len]
-
-    return np.array(values, dtype=np.float32)
-
-
-def to_minmax(seq):
-    arr = (seq - 60.0) / (120.0 - 60.0)
-    return np.clip(arr, 0.0, 1.0)
-
-
-def tanh_unit(values, scale):
-    return (np.tanh(values / scale) + 1.0) / 2.0
-
-
-def build_features(raw_seq, feature_mode):
-    base = to_minmax(raw_seq)
-    if feature_mode == "enhanced":
-        diff = np.diff(raw_seq, prepend=raw_seq[0])
-        kernel = np.ones(5, dtype=np.float32) / 5.0
-        moving_avg = np.convolve(raw_seq, kernel, mode="same")
-        dev = raw_seq - moving_avg
-        features = np.stack([base, tanh_unit(diff, 5.0), tanh_unit(dev, 5.0)], axis=0)
-        return features.astype(np.float32)
-    return np.expand_dims(base, axis=0).astype(np.float32)
-
-
-def load_input_sequence(args):
-    if args.hr_seq:
-        return args.hr_seq
-
-    if args.csv:
-        df = pd.read_csv(args.csv)
-        if "hr_sequence" not in df.columns:
-            raise ValueError("CSV must contain hr_sequence column")
-        if args.row < 0 or args.row >= len(df):
-            raise IndexError("row out of range")
-        return str(df.iloc[args.row]["hr_sequence"])
-
-    raise ValueError("Provide either --hr-seq or --csv")
-
-
-def main():
-    args = parse_args()
-    seq_text = load_input_sequence(args)
-
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-    ckpt = torch.load(args.ckpt, map_location=device)
-    if isinstance(ckpt, dict) and "model_state_dict" in ckpt:
-        state = ckpt["model_state_dict"]
-        meta = ckpt
-    else:
-        state = ckpt
-        meta = {}
-
-    loss_type = args.loss_type if args.loss_type != "auto" else str(meta.get("loss_type", "ce")).lower()
-    model_arch = args.model_arch if args.model_arch != "auto" else str(meta.get("model_arch", "legacy_bilstm")).lower()
-    hidden_dim = args.hidden_dim if args.hidden_dim > 0 else int(meta.get("hidden_dim", 64))
-    feature_mode = args.feature_mode if args.feature_mode != "auto" else str(meta.get("feature_mode", "basic")).lower()
-    in_channels = int(meta.get("in_channels", 1 if feature_mode == "basic" else 3))
-
-    model = HRSingleModalModel(
-        seq_len=args.seq_len,
-        num_classes=args.num_classes,
-        in_channels=in_channels,
-        output_mode=loss_type,
-        model_arch=model_arch,
-        hidden_dim=hidden_dim,
-    ).to(device)
-    model.load_state_dict(state)
-    model.eval()
-
-    raw_seq = parse_sequence(seq_text, args.seq_len)
-    features = build_features(raw_seq, feature_mode)
-    x = torch.tensor(features, dtype=torch.float32).unsqueeze(0).to(device)
-
-    with torch.no_grad():
-        logits = model(x)
-        if loss_type == "coral":
-            level_probs = torch.sigmoid(logits).squeeze(0).cpu().numpy()
-            pred = int((level_probs > 0.5).sum())
-            # 将 level 概率近似映射为类别概率，便于展示。
-            probs = np.zeros(args.num_classes, dtype=np.float32)
-            probs[0] = 1.0 - level_probs[0]
-            for i in range(1, args.num_classes - 1):
-                probs[i] = max(0.0, level_probs[i - 1] - level_probs[i])
-            probs[-1] = level_probs[-1]
-            s = probs.sum()
-            if s > 0:
-                probs = probs / s
+class VideoPainPredictor:
+    """
+    视频疼痛等级预测器
+    
+    Args:
+        checkpoint_path: 模型检查点路径
+        device: 运行设备 ('cuda' 或 'cpu')
+    """
+    
+    def __init__(self, checkpoint_path: str, device: str = None):
+        if device is None:
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.device = torch.device(device)
+        
+        # 加载检查点
+        print(f"加载模型: {checkpoint_path}")
+        checkpoint = torch.load(checkpoint_path, map_location=self.device)
+        
+        # 获取配置
+        self.config = checkpoint['config']
+        self.num_classes = self.config['num_classes']
+        
+        # 构建模型
+        self.model = build_model(
+            num_classes=self.config['num_classes'],
+            cnn_model=self.config['cnn_model'],
+            hidden_dim=self.config['hidden_dim'],
+            num_lstm_layers=self.config['num_lstm_layers'],
+            dropout=0.0,  # 预测时不使用 dropout
+            bidirectional=self.config['bidirectional'],
+            pretrained=False,
+        ).to(self.device)
+        
+        # 加载权重
+        self.model.load_state_dict(checkpoint['model_state_dict'])
+        self.model.eval()
+        
+        # 创建变换
+        self.transform = get_val_transform(
+            modality=self.config['modality'],
+            img_size=self.config['img_size'],
+        )
+        
+        self.seq_len = self.config['seq_len']
+        self.modality = self.config['modality']
+        
+        print(f"模型加载完成: {checkpoint['best_kappa']:.4f} kappa")
+    
+    def _load_frame(self, frame_path: str) -> Image.Image:
+        """加载单帧图像"""
+        img = Image.open(frame_path)
+        
+        if self.modality == 'rgb':
+            if img.mode != 'RGB':
+                img = img.convert('RGB')
         else:
-            probs = torch.softmax(logits, dim=1).squeeze(0).cpu().numpy()
-            pred = int(np.argmax(probs))
+            if img.mode != 'L':
+                img = img.convert('L')
+        
+        return img
+    
+    def _sample_frames(self, frame_paths: List[str]) -> List[str]:
+        """采样帧序列"""
+        num_frames = len(frame_paths)
+        
+        if num_frames <= self.seq_len:
+            # 帧数不足,重复最后一帧
+            sampled = frame_paths.copy()
+            while len(sampled) < self.seq_len:
+                sampled.append(frame_paths[-1])
+            return sampled
+        
+        # 均匀采样
+        indices = np.linspace(0, num_frames - 1, self.seq_len, dtype=int)
+        return [frame_paths[i] for i in indices]
+    
+    def predict_frames(self, frame_paths: List[str]) -> dict:
+        """
+        从帧路径列表预测疼痛等级
+        
+        Args:
+            frame_paths: 图像文件路径列表
+        
+        Returns:
+            result: {
+                'predicted_class': int,
+                'probabilities': np.array,
+                'confidence': float,
+            }
+        """
+        # 采样帧
+        sampled_paths = self._sample_frames(frame_paths)
+        
+        # 加载并变换帧
+        frames = []
+        for path in sampled_paths:
+            img = self._load_frame(path)
+            frame_tensor = self.transform(img)
+            frames.append(frame_tensor)
+        
+        # 堆叠成序列: [1, T, C, H, W]
+        frames = torch.stack(frames, dim=0).unsqueeze(0).to(self.device)
+        
+        # 预测
+        with torch.no_grad():
+            outputs = self.model(frames)
+            probabilities = torch.softmax(outputs, dim=1).cpu().numpy()[0]
+            predicted_class = int(np.argmax(probabilities))
+            confidence = float(np.max(probabilities))
+        
+        return {
+            'predicted_class': predicted_class,
+            'probabilities': probabilities,
+            'confidence': confidence,
+        }
+    
+    def predict_video(self, video_dir: str) -> dict:
+        """
+        从视频目录预测疼痛等级
+        
+        Args:
+            video_dir: 包含帧图像的目录路径
+        
+        Returns:
+            result: 预测结果字典
+        """
+        video_dir = Path(video_dir)
+        
+        # 根据模态查找图像文件
+        if self.modality == 'rgb':
+            frame_paths = sorted(list(video_dir.glob('*.jpg')) + list(video_dir.glob('*.png')))
+        elif self.modality == 'depth':
+            frame_paths = sorted(list(video_dir.glob('D/*.png')) + list(video_dir.glob('D/*.jpg')))
+        elif self.modality == 'thermal':
+            frame_paths = sorted(list(video_dir.glob('T/*.png')) + list(video_dir.glob('T/*.jpg')))
+        else:
+            raise ValueError(f"Unsupported modality: {self.modality}")
+        
+        if len(frame_paths) == 0:
+            raise ValueError(f"No frames found in {video_dir}")
+        
+        return self.predict_frames([str(p) for p in frame_paths])
 
-    label_map = {
-        0: "mild (NRS 1-3)",
-        1: "moderate (NRS 4-6)",
-        2: "severe (NRS 7-8)",
-    }
 
-    print("Device:", device)
-    print("Loss type:", loss_type)
-    print("Model arch:", model_arch)
-    print("Feature mode:", feature_mode)
-    print("Predicted class:", pred, "->", label_map.get(pred, "unknown"))
-    print("Class probabilities [mild, moderate, severe]:")
-    print([round(float(p), 6) for p in probs])
+def predict_single_video(
+    checkpoint_path: str,
+    video_dir: str,
+    device: str = None,
+) -> dict:
+    """
+    便捷函数: 预测单个视频
+    
+    Args:
+        checkpoint_path: 模型检查点路径
+        video_dir: 视频帧目录
+        device: 设备
+    
+    Returns:
+        result: 预测结果
+    """
+    predictor = VideoPainPredictor(checkpoint_path, device)
+    return predictor.predict_video(video_dir)
 
 
-if __name__ == "__main__":
-    main()
+if __name__ == '__main__':
+    import argparse
+    
+    parser = argparse.ArgumentParser(description='视频疼痛等级预测')
+    parser.add_argument('--checkpoint', type=str, required=True,
+                        help='模型检查点路径')
+    parser.add_argument('--video_dir', type=str, required=True,
+                        help='视频帧目录')
+    parser.add_argument('--device', type=str, default=None,
+                        help='设备 (cuda/cpu)')
+    
+    args = parser.parse_args()
+    
+    # 预测
+    result = predict_single_video(
+        checkpoint_path=args.checkpoint,
+        video_dir=args.video_dir,
+        device=args.device,
+    )
+    
+    # 输出结果
+    print(f"\n预测结果:")
+    print(f"  疼痛等级: {result['predicted_class']}")
+    print(f"  置信度: {result['confidence']:.4f}")
+    print(f"  概率分布: {result['probabilities']}")
